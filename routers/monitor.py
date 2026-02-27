@@ -143,6 +143,9 @@ def get_pods(
 
         results.append(data)
 
+    # OK statüsünü gösterme — sadece aktif problem/error
+    results = [r for r in results if r.get("status") in ("PROBLEM", "ERROR")]
+
     # namespace+cluster sırala
     results.sort(key=lambda r: (r["namespace"], r["cluster"]))
     return results
