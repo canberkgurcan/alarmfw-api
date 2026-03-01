@@ -1,6 +1,9 @@
 # Hassas bilgiler
 .env
 
+# Bootstrap scripti (local çalıştırılır, push edilmez)
+scripts/bootstrap.sh
+
 # Python
 __pycache__/
 *.pyc

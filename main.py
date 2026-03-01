@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import checks, notifiers, secrets, alarms, runner, env, policies, config, monitor
+from routers import checks, notifiers, secrets, alarms, runner, env, policies, config, monitor, terminal
 
 app = FastAPI(title="AlarmFW API", version="0.1.0")
 
@@ -21,6 +21,7 @@ app.include_router(env.router)
 app.include_router(policies.router)
 app.include_router(config.router)
 app.include_router(monitor.router)
+app.include_router(terminal.router)
 
 
 @app.get("/api/health")

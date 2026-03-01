@@ -10,6 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# OpenShift CLI (oc)
+RUN curl -fsSL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz \
+    | tar -xz -C /usr/local/bin/ oc \
+    && chmod +x /usr/local/bin/oc
+
 WORKDIR /app
 
 RUN --mount=type=cache,target=/root/.cache/pip \
