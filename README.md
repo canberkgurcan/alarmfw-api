@@ -46,8 +46,20 @@ docker run -p 8000:8000 \
 ## OCP Deploy
 
 ```bash
-# PVC'lerin oluşturulmuş olması gerekir (alarmfw reposundaki ocp/pvc.yaml)
 oc apply -f ocp/deployment.yaml -n alarmfw-prod
+oc set image deployment/alarmfw-api alarmfw-api=REGISTRY/alarmfw-api:TAG -n alarmfw-prod
 ```
 
-Pipeline: `Jenkinsfile`
+> PVC'lerin önceden oluşturulmuş olması gerekir: `oc apply -f ../alarmfw/ocp/pvc.yaml -n alarmfw-prod`
+
+## Jenkins Pipeline
+
+4 stage: **Checkout SCM → Docker Build → Nexus Push → OCP Deploy**
+
+| Değişken | Açıklama |
+|---|---|
+| `REGISTRY_URL` | Nexus registry adresi |
+| `REGISTRY_CREDS` | Jenkins credential ID (Docker kullanıcı/şifre) |
+| `OCP_API_URL` | OpenShift API endpoint |
+| `OCP_TOKEN_CREDS` | Jenkins credential ID (OCP service account token) |
+| `DEPLOY_NAMESPACE` | Deploy namespace (ör: `alarmfw-prod`) |
