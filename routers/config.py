@@ -293,3 +293,66 @@ def delete_cluster(name: str) -> Dict[str, Any]:
 def generate() -> Dict[str, Any]:
     count = _generate_yaml()
     return {"ok": True, "generated_checks": count}
+
+
+# ── Observe clusters (observe.yaml) ───────────────────
+
+def _observe_yaml_path() -> Path:
+    return ALARMFW_CONFIG / "observe.yaml"
+
+def _read_observe_yaml() -> Dict[str, Any]:
+    p = _observe_yaml_path()
+    if not p.exists():
+        return {"clusters": []}
+    with open(p) as f:
+        data = yaml.safe_load(f) or {}
+    raw = data.get("clusters", [])
+    clusters = [c for c in raw if isinstance(c, dict)] if isinstance(raw, list) else []
+    data["clusters"] = clusters
+    return data
+
+def _write_observe_yaml(data: Dict[str, Any]) -> None:
+    p = _observe_yaml_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
+
+
+@router.get("/observe-clusters")
+def list_observe_clusters() -> List[Dict[str, Any]]:
+    data = _read_observe_yaml()
+    return data.get("clusters", [])
+
+
+@router.put("/observe-clusters/{name}")
+def upsert_observe_cluster(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    from config import ALARMFW_SECRETS
+    entry: Dict[str, Any] = {
+        "name":    name,
+        "ocp_api": str(body.get("ocp_api", "")),
+        "insecure": bool(body.get("insecure", True)),
+        "prometheus_url":        str(body.get("prometheus_url", "")),
+        "prometheus_token_file": str(ALARMFW_SECRETS / f"{name}-prometheus.token"),
+    }
+    data = _read_observe_yaml()
+    clusters = data.get("clusters", [])
+    found = False
+    for i, c in enumerate(clusters):
+        if isinstance(c, dict) and c.get("name") == name:
+            clusters[i] = entry
+            found = True
+            break
+    if not found:
+        clusters.append(entry)
+    data["clusters"] = clusters
+    _write_observe_yaml(data)
+    return {"ok": True, "name": name}
+
+
+@router.delete("/observe-clusters/{name}")
+def delete_observe_cluster(name: str) -> Dict[str, Any]:
+    data = _read_observe_yaml()
+    clusters = [c for c in data.get("clusters", []) if isinstance(c, dict) and c.get("name") != name]
+    data["clusters"] = clusters
+    _write_observe_yaml(data)
+    return {"ok": True, "name": name}
