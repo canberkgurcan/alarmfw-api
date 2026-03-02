@@ -122,32 +122,35 @@ fi
 
 # Python ile YAML güncelle (mevcut kodu bozmadan)
 python3 - << PYEOF
-import yaml, sys, os
+import yaml
 
 path = "${OBSERVE_YAML}"
 with open(path) as f:
     data = yaml.safe_load(f) or {}
 
-data.setdefault("clusters", [])
+# clusters her zaman list of dict olmalı — bozuk formatlarda sıfırla
+raw = data.get("clusters", [])
+clusters = [c for c in raw if isinstance(c, dict)] if isinstance(raw, list) else []
 
 entry = {
-    "name":            "${CLUSTER}",
-    "ocp_api":         "${OCP_API}",
-    "insecure":        True,
-    "prometheus_url":  "${PROMETHEUS_URL}",
+    "name":                  "${CLUSTER}",
+    "ocp_api":               "${OCP_API}",
+    "insecure":              True,
+    "prometheus_url":        "${PROMETHEUS_URL}",
     "prometheus_token_file": "${SECRETS_DIR}/${CLUSTER}-prometheus.token",
 }
 
 # Mevcut cluster'ı güncelle veya ekle
 found = False
-for i, c in enumerate(data["clusters"]):
+for i, c in enumerate(clusters):
     if c.get("name") == "${CLUSTER}":
-        data["clusters"][i] = entry
+        clusters[i] = entry
         found = True
         break
 if not found:
-    data["clusters"].append(entry)
+    clusters.append(entry)
 
+data["clusters"] = clusters
 with open(path, "w") as f:
     yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
 
