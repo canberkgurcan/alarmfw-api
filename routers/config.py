@@ -2,12 +2,11 @@ from fastapi import APIRouter, HTTPException
 from typing import Any, Dict, List
 import yaml
 from pathlib import Path
-from config import ALARMFW_CONFIG, ALARMFW_ENV, ALARMFW_SECRETS
+from config import ALARMFW_CONFIG, ALARMFW_SECRETS
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
 CONF_D    = Path(ALARMFW_CONFIG).parent / "legacy/podhealthalarm/conf.d"
-CLUSTER_D = Path(ALARMFW_CONFIG).parent / "legacy/podhealthalarm/clusters.d"
 GENERATED = ALARMFW_CONFIG / "generated/ocp_pod_health.yaml"
 
 
@@ -29,35 +28,6 @@ def _write_conf(path: Path, data: Dict[str, str]) -> None:
     lines = [f'{k}="{v}"' for k, v in data.items() if v is not None]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-
-def _read_env_file() -> Dict[str, str]:
-    if not ALARMFW_ENV.exists():
-        return {}
-    result: Dict[str, str] = {}
-    for line in ALARMFW_ENV.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        result[k.strip()] = v.strip()
-    return result
-
-
-def _write_env_file(data: Dict[str, str]) -> None:
-    lines = [f"{k}={v}" for k, v in data.items()]
-    ALARMFW_ENV.write_text("\n".join(lines) + "\n")
-
-
-def _resolve(value: str, env: Dict[str, str]) -> str:
-    """${VAR_NAME} referansını gerçek değere çevirir."""
-    if value.startswith("${") and value.endswith("}"):
-        return env.get(value[2:-1], value)
-    return value
-
-
-def _cluster_env_key(name: str) -> str:
-    """esy2-digital  →  OCP_API_ESY2_DIGITAL"""
-    return "OCP_API_" + name.upper().replace("-", "_")
 
 
 def _is_true(v: str | None) -> bool:
