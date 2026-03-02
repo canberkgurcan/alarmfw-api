@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from typing import Any, Dict, List
 import yaml
 from pathlib import Path
-from config import ALARMFW_CONFIG, ALARMFW_ENV
+from config import ALARMFW_CONFIG, ALARMFW_ENV, ALARMFW_SECRETS
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -69,9 +69,16 @@ def _bool_str(v: bool) -> str:
 
 
 def _generate_yaml() -> int:
-    """Regenerate config/generated/ocp_pod_health.yaml from conf.d + clusters.d"""
+    """Regenerate config/generated/ocp_pod_health.yaml from conf.d + observe.yaml clusters"""
     checks = []
-    env = _read_env_file()
+
+    # Cluster bilgisini observe.yaml'dan al (isim → dict)
+    obs_data = _read_observe_yaml()
+    obs_clusters = {
+        c["name"]: c
+        for c in obs_data.get("clusters", [])
+        if isinstance(c, dict) and c.get("name")
+    }
 
     for ns_conf in sorted(CONF_D.glob("*.conf")):
         ns = ns_conf.stem
@@ -103,16 +110,14 @@ def _generate_yaml() -> int:
             primary, fallback = ["dev_outbox"], []
 
         for cl in clusters:
-            cl_conf = CLUSTER_D / f"{cl}.conf"
-            if not cl_conf.exists():
+            cl_data = obs_clusters.get(cl)
+            if not cl_data:
                 continue
-            cl_cfg = _read_conf(cl_conf)
-            ocp_api   = _resolve(cl_cfg.get("OCP_API", ""), env)
-            ocp_token_file = f"/secrets/{cl}.token"
-            insecure  = cl_cfg.get("OCP_INSECURE", "true")
-
+            ocp_api = cl_data.get("ocp_api", "")
             if not ocp_api:
                 continue
+            ocp_token_file = f"/secrets/{cl}.token"
+            insecure = "true" if cl_data.get("insecure", True) else "false"
 
             checks.append({
                 "name": f"ocp_pod_health__{ns}__{cl}",
@@ -229,62 +234,72 @@ def delete_namespace(name: str) -> Dict[str, Any]:
 
 
 # ── Clusters ──────────────────────────────────────────
+# Tek kaynak: observe.yaml (Secrets sayfasında eklenen cluster'lar burada görünür)
 
 @router.get("/clusters")
 def list_clusters() -> List[Dict[str, Any]]:
-    if not CLUSTER_D.exists():
-        return []
-    env = _read_env_file()
+    data = _read_observe_yaml()
     result = []
-    for f in sorted(CLUSTER_D.glob("*.conf")):
-        raw = _read_conf(f)
+    for c in data.get("clusters", []):
+        if not isinstance(c, dict) or not c.get("name"):
+            continue
+        name = c["name"]
         result.append({
-            "name":     f.stem,
-            "ocp_api":  _resolve(raw.get("OCP_API", ""), env),
-            "insecure": _is_true(raw.get("OCP_INSECURE", "true")),
-            "has_token_file": (Path(ALARMFW_CONFIG).parent.parent /
-                               "alarmfw-secrets" / f"{f.stem}.token").exists(),
+            "name":           name,
+            "ocp_api":        c.get("ocp_api", ""),
+            "insecure":       bool(c.get("insecure", True)),
+            "has_token_file": (ALARMFW_SECRETS / f"{name}.token").exists(),
         })
     return result
 
 
 @router.get("/clusters/{name}")
 def get_cluster(name: str) -> Dict[str, Any]:
-    f = CLUSTER_D / f"{name}.conf"
-    if not f.exists():
-        raise HTTPException(404, f"Cluster '{name}' not found")
-    env = _read_env_file()
-    raw = _read_conf(f)
-    return {
-        "name":     name,
-        "ocp_api":  _resolve(raw.get("OCP_API", ""), env),
-        "insecure": _is_true(raw.get("OCP_INSECURE", "true")),
-    }
+    data = _read_observe_yaml()
+    for c in data.get("clusters", []):
+        if isinstance(c, dict) and c.get("name") == name:
+            return {
+                "name":     name,
+                "ocp_api":  c.get("ocp_api", ""),
+                "insecure": bool(c.get("insecure", True)),
+            }
+    raise HTTPException(404, f"Cluster '{name}' not found")
 
 
 @router.put("/clusters/{name}")
 def upsert_cluster(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    f = CLUSTER_D / f"{name}.conf"
-    ocp_api = str(body.get("ocp_api", ""))
-    data = {
-        "OCP_API":      ocp_api,
-        "OCP_INSECURE": _bool_str(body.get("insecure", True)),
-    }
-    _write_conf(f, data)
-    # Gerçek URL ise .env'e de yaz
-    if ocp_api and not (ocp_api.startswith("${") and ocp_api.endswith("}")):
-        env = _read_env_file()
-        env[_cluster_env_key(name)] = ocp_api
-        _write_env_file(env)
+    new_ocp_api  = str(body.get("ocp_api", ""))
+    new_insecure = bool(body.get("insecure", True))
+    data = _read_observe_yaml()
+    clusters = data.get("clusters", [])
+    found = False
+    for i, c in enumerate(clusters):
+        if isinstance(c, dict) and c.get("name") == name:
+            clusters[i] = {**c, "ocp_api": new_ocp_api, "insecure": new_insecure}
+            found = True
+            break
+    if not found:
+        clusters.append({
+            "name":                  name,
+            "ocp_api":               new_ocp_api,
+            "insecure":              new_insecure,
+            "prometheus_url":        "",
+            "prometheus_token_file": str(ALARMFW_SECRETS / f"{name}-prometheus.token"),
+        })
+    data["clusters"] = clusters
+    _write_observe_yaml(data)
     return {"ok": True, "name": name}
 
 
 @router.delete("/clusters/{name}")
 def delete_cluster(name: str) -> Dict[str, Any]:
-    f = CLUSTER_D / f"{name}.conf"
-    if not f.exists():
+    data = _read_observe_yaml()
+    before = data.get("clusters", [])
+    after = [c for c in before if not (isinstance(c, dict) and c.get("name") == name)]
+    if len(after) == len(before):
         raise HTTPException(404, f"Cluster '{name}' not found")
-    f.unlink()
+    data["clusters"] = after
+    _write_observe_yaml(data)
     count = _generate_yaml()
     return {"ok": True, "name": name, "generated_checks": count}
 
