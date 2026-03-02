@@ -129,9 +129,9 @@ run_bootstrap_for_cluster() {
     [[ -n "${ZABBIX_TOKEN:-}" ]] && CMD+=(--zabbix-token "$ZABBIX_TOKEN")
 
     if [[ "$MODE" == "docker" ]]; then
-        docker exec -i "$DOCKER_CONTAINER" "${CMD[@]}"
+        docker exec -i "$DOCKER_CONTAINER" "${CMD[@]}" || { echo -e "${RED}[ERR]${NC} Bootstrap başarısız oldu."; return 1; }
     else
-        oc exec -n "$OCP_NAMESPACE" "$OCP_POD" -i -- "${CMD[@]}"
+        oc exec -n "$OCP_NAMESPACE" "$OCP_POD" -i -- "${CMD[@]}" || { echo -e "${RED}[ERR]${NC} Bootstrap başarısız oldu."; return 1; }
     fi
 }
 
