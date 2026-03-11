@@ -1,4 +1,5 @@
 import os
+import shlex
 import subprocess
 import yaml
 from fastapi import APIRouter
@@ -14,6 +15,7 @@ _ENV         = {**os.environ, "HOME": "/root", "KUBECONFIG": _KUBECONFIG}
 ALARMFW_CONFIG  = Path(os.getenv("ALARMFW_CONFIG",  "/home/cnbrkgrcn/projects/alarmfw/config"))
 ALARMFW_SECRETS = Path(os.getenv("ALARMFW_SECRETS", "/home/cnbrkgrcn/alarmfw-secrets"))
 OCP_CONF_DIR    = ALARMFW_CONFIG / "generated"
+ALLOWED_COMMANDS = {"oc", "docker", "kubectl"}
 
 
 def _get_clusters() -> Dict[str, Dict[str, Any]]:
@@ -42,9 +44,9 @@ def _get_clusters() -> Dict[str, Dict[str, Any]]:
     return clusters
 
 
-def _run(cmd: str, timeout: int = 30) -> Dict[str, Any]:
+def _run(args: list, timeout: int = 30) -> Dict[str, Any]:
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, env=_ENV)
+        r = subprocess.run(args, shell=False, capture_output=True, text=True, timeout=timeout, env=_ENV)
         return {"ok": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr, "exit_code": r.returncode}
     except subprocess.TimeoutExpired:
         return {"ok": False, "stdout": "", "stderr": f"Timeout ({timeout}s)", "exit_code": -1}
@@ -56,11 +58,18 @@ def _run(cmd: str, timeout: int = 30) -> Dict[str, Any]:
 
 @router.post("/exec")
 def exec_command(body: Dict[str, Any]) -> Dict[str, Any]:
-    """Verilen shell komutunu çalıştırır, stdout/stderr döner."""
-    cmd = body.get("command", "").strip()
-    if not cmd:
+    """Verilen komutu çalıştırır, stdout/stderr döner. Sadece izin verilen komutlar çalışır."""
+    cmd_str = body.get("command", "").strip()
+    if not cmd_str:
         return {"ok": False, "stdout": "", "stderr": "Komut boş.", "exit_code": 1}
-    return _run(cmd)
+    try:
+        args = shlex.split(cmd_str)
+    except ValueError as e:
+        return {"ok": False, "stdout": "", "stderr": f"Geçersiz komut: {e}", "exit_code": 1}
+    if not args or args[0] not in ALLOWED_COMMANDS:
+        allowed = ", ".join(sorted(ALLOWED_COMMANDS))
+        return {"ok": False, "stdout": "", "stderr": f"İzin verilmeyen komut. Sadece şunlar kullanılabilir: {allowed}", "exit_code": 1}
+    return _run(args)
 
 
 # ── Whoami ────────────────────────────────────────────────────────────────────
@@ -114,5 +123,7 @@ def oc_login(body: Dict[str, Any]) -> Dict[str, Any]:
     if not token:
         return {"ok": False, "stdout": "", "stderr": "Token dosyası boş.", "exit_code": 1}
 
-    cmd = f"oc login {ocp_api} --token={token} --insecure-skip-tls-verify=true"
-    return _run(cmd)
+    args = ["oc", "login", ocp_api, f"--token={token}"]
+    if c.get("insecure"):
+        args.append("--insecure-skip-tls-verify=true")
+    return _run(args)
