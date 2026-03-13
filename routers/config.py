@@ -210,6 +210,42 @@ def get_cluster(name: str) -> Dict[str, Any]:
     raise HTTPException(404, f"Cluster '{name}' not found")
 
 
+@router.put("/clusters/{name}", dependencies=[Depends(require_admin)])
+def upsert_cluster(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """ocp_api ve insecure alanlarını günceller; prometheus ve diğer alanları korur."""
+    data     = _read_observe_yaml()
+    clusters = data.get("clusters", [])
+    found    = False
+    for i, c in enumerate(clusters):
+        if isinstance(c, dict) and c.get("name") == name:
+            clusters[i] = {
+                **c,
+                "name":     name,
+                "ocp_api":  str(body.get("ocp_api", c.get("ocp_api", ""))),
+                "insecure": bool(body.get("insecure", c.get("insecure", True))),
+            }
+            found = True
+            break
+    if not found:
+        clusters.append({
+            "name":     name,
+            "ocp_api":  str(body.get("ocp_api", "")),
+            "insecure": bool(body.get("insecure", True)),
+        })
+    data["clusters"] = clusters
+    _write_observe_yaml(data)
+    return {"ok": True, "name": name}
+
+
+@router.delete("/clusters/{name}", dependencies=[Depends(require_admin)])
+def delete_cluster(name: str) -> Dict[str, Any]:
+    data     = _read_observe_yaml()
+    clusters = [c for c in data.get("clusters", []) if isinstance(c, dict) and c.get("name") != name]
+    data["clusters"] = clusters
+    _write_observe_yaml(data)
+    return {"ok": True, "name": name}
+
+
 @router.post("/generate", dependencies=[Depends(require_admin)])
 def generate() -> Dict[str, Any]:
     count = _generate_yaml()

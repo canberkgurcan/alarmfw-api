@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query
 from typing import Any, Dict, List, Optional
 import json
 import sqlite3
+import time
 from config import ALARMFW_STATE
 
 router = APIRouter(prefix="/api/alarms", tags=["alarms"])
@@ -65,6 +66,139 @@ def get_alarm_state() -> List[Dict[str, Any]]:
         return [{"error": str(e)}]
     finally:
         conn.close()
+
+
+@router.get("/history")
+def get_alarm_history(
+    limit: int = Query(100, ge=1, le=1000),
+    status: Optional[str] = Query(None),
+    cluster: Optional[str] = Query(None),
+    namespace: Optional[str] = Query(None),
+    alarm_name: Optional[str] = Query(None),
+    dedup_key: Optional[str] = Query(None),
+    since_ts: Optional[int] = Query(None),
+    hours: Optional[int] = Query(None),
+) -> List[Dict[str, Any]]:
+    """alarm_history tablosundan event log döner. Tablo yoksa boş liste."""
+    conn = _open_db()
+    if conn is None:
+        return []
+    try:
+        # Tablo yoksa oluştur
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS alarm_history (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_ts      INTEGER NOT NULL,
+                timestamp_utc TEXT,
+                event_type    TEXT NOT NULL,
+                dedup_key     TEXT NOT NULL,
+                alarm_name    TEXT,
+                status        TEXT NOT NULL,
+                prev_status   TEXT,
+                severity      TEXT,
+                cluster       TEXT,
+                namespace     TEXT,
+                message       TEXT,
+                payload_json  TEXT
+            )
+        """)
+        conn.commit()
+
+        where: List[str] = []
+        params: List[Any] = []
+
+        if status:
+            where.append("status = ?")
+            params.append(status.upper())
+        if cluster:
+            where.append("cluster = ?")
+            params.append(cluster)
+        if namespace:
+            where.append("namespace = ?")
+            params.append(namespace)
+        if alarm_name:
+            where.append("alarm_name = ?")
+            params.append(alarm_name)
+        if dedup_key:
+            where.append("dedup_key = ?")
+            params.append(dedup_key)
+        if since_ts is not None:
+            where.append("event_ts >= ?")
+            params.append(since_ts)
+        elif hours is not None:
+            cutoff = int(time.time()) - hours * 3600
+            where.append("event_ts >= ?")
+            params.append(cutoff)
+
+        sql = "SELECT * FROM alarm_history"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY event_ts DESC LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    result = []
+    for row in rows:
+        entry = dict(row)
+        raw_payload = entry.pop("payload_json", None)
+        if raw_payload:
+            try:
+                entry["payload"] = json.loads(raw_payload)
+            except Exception:
+                pass
+        result.append(entry)
+    return result
+
+
+@router.get("/metrics")
+def get_alarm_metrics() -> Dict[str, Any]:
+    """alarm_state tablosundan türetilmiş runtime metrikleri döner."""
+    conn = _open_db()
+    if conn is None:
+        return {
+            "version": 0,
+            "updated_at_utc": "",
+            "rules_evaluated_total": 0,
+            "notifications_sent_total": 0,
+            "notifications_suppressed_total": 0,
+            "evaluation_count_total": 0,
+            "evaluation_latency_ms_last": 0,
+            "evaluation_latency_ms_sum": 0,
+            "evaluation_latency_ms_avg": 0,
+            "last_exit_code": 0,
+        }
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM alarm_state").fetchone()[0]
+        problems = conn.execute(
+            "SELECT COUNT(*) FROM alarm_state WHERE last_status IN ('PROBLEM','ERROR')"
+        ).fetchone()[0]
+        last_ts_row = conn.execute(
+            "SELECT MAX(last_change_ts) FROM alarm_state"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    from datetime import datetime, timezone
+    updated = (
+        datetime.fromtimestamp(last_ts_row, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if last_ts_row else ""
+    )
+
+    return {
+        "version": 1,
+        "updated_at_utc": updated,
+        "rules_evaluated_total": total,
+        "notifications_sent_total": 0,
+        "notifications_suppressed_total": 0,
+        "evaluation_count_total": total,
+        "evaluation_latency_ms_last": 0,
+        "evaluation_latency_ms_sum": 0,
+        "evaluation_latency_ms_avg": 0,
+        "last_exit_code": 1 if problems > 0 else 0,
+    }
 
 
 @router.delete("/outbox")
