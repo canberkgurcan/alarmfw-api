@@ -1,9 +1,7 @@
 from fastapi import APIRouter, Query
 from typing import Any, Dict, List, Optional, Set, Tuple
 import json
-import os
 import sqlite3
-import requests
 import yaml
 from pathlib import Path
 from config import ALARMFW_CONFIG, ALARMFW_STATE
@@ -134,37 +132,3 @@ def list_monitor_clusters() -> List[str]:
     return sorted(from_config | from_db)
 
 
-@router.post("/promql")
-def run_promql(body: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Prometheus'a PromQL sorgusu gönderir.
-    PROMETHEUS_URL env tanımlı değilse boş sonuç döner.
-    body: { query: str, time?: str }
-    """
-    prom_url = os.getenv("PROMETHEUS_URL", "").rstrip("/")
-    if not prom_url:
-        return {"ok": False, "error": "PROMETHEUS_URL tanımlanmamış", "result": []}
-
-    query = body.get("query", "").strip()
-    if not query:
-        return {"ok": False, "error": "Sorgu boş", "result": []}
-
-    params: Dict[str, str] = {"query": query}
-    if body.get("time"):
-        params["time"] = body["time"]
-
-    try:
-        r = requests.get(
-            f"{prom_url}/api/v1/query",
-            params=params,
-            timeout=15,
-            verify=False,
-        )
-        r.raise_for_status()
-        data = r.json()
-        return {
-            "ok":     True,
-            "result": data.get("data", {}).get("result", []),
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e), "result": []}

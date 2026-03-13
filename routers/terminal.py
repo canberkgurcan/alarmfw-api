@@ -2,9 +2,10 @@ import os
 import shlex
 import subprocess
 import yaml
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pathlib import Path
 from typing import Any, Dict, List
+from auth import require_operator
 
 router = APIRouter(prefix="/api/terminal", tags=["terminal"])
 
@@ -14,33 +15,28 @@ _ENV         = {**os.environ, "HOME": "/root", "KUBECONFIG": _KUBECONFIG}
 
 ALARMFW_CONFIG  = Path(os.getenv("ALARMFW_CONFIG",  "/home/cnbrkgrcn/projects/alarmfw/config"))
 ALARMFW_SECRETS = Path(os.getenv("ALARMFW_SECRETS", "/home/cnbrkgrcn/alarmfw-secrets"))
-OCP_CONF_DIR    = ALARMFW_CONFIG / "generated"
-ALLOWED_COMMANDS = {"oc", "docker", "kubectl"}
+ALLOWED_COMMANDS = {"oc"}
 
 
 def _get_clusters() -> Dict[str, Dict[str, Any]]:
+    """Cluster listesini observe.yaml'dan okur (tek kaynak)."""
+    p = ALARMFW_CONFIG / "observe.yaml"
+    if not p.exists():
+        return {}
+    try:
+        data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
     clusters: Dict[str, Dict[str, Any]] = {}
-    if not OCP_CONF_DIR.exists():
-        return clusters
-    for f in OCP_CONF_DIR.glob("*.yaml"):
-        try:
-            data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
-            for check in data.get("checks", []) or []:
-                if not check.get("enabled", True):
-                    continue
-                if check.get("type") not in ("ocp_pod_health", "ocp_cluster_snapshot"):
-                    continue
-                params = check.get("params", {}) or {}
-                name = params.get("cluster", "")
-                if not name or name in clusters:
-                    continue
-                clusters[name] = {
-                    "name":     name,
-                    "ocp_api":  params.get("ocp_api", "").rstrip("/"),
-                    "insecure": str(params.get("ocp_insecure", "false")).lower() == "true",
-                }
-        except Exception:
-            pass
+    for c in data.get("clusters", []):
+        if not isinstance(c, dict) or not c.get("name") or not c.get("ocp_api"):
+            continue
+        name = c["name"]
+        clusters[name] = {
+            "name":     name,
+            "ocp_api":  c["ocp_api"].rstrip("/"),
+            "insecure": bool(c.get("insecure", True)),
+        }
     return clusters
 
 
@@ -56,7 +52,7 @@ def _run(args: list, timeout: int = 30) -> Dict[str, Any]:
 
 # ── Exec ──────────────────────────────────────────────────────────────────────
 
-@router.post("/exec")
+@router.post("/exec", dependencies=[Depends(require_operator)])
 def exec_command(body: Dict[str, Any]) -> Dict[str, Any]:
     """Verilen komutu çalıştırır, stdout/stderr döner. Sadece izin verilen komutlar çalışır."""
     cmd_str = body.get("command", "").strip()
@@ -99,7 +95,7 @@ def list_clusters() -> List[Dict[str, Any]]:
 
 # ── Login ─────────────────────────────────────────────────────────────────────
 
-@router.post("/login")
+@router.post("/login", dependencies=[Depends(require_operator)])
 def oc_login(body: Dict[str, Any]) -> Dict[str, Any]:
     """Cluster adına göre token dosyasını okuyup oc login çalıştırır."""
     cluster_name = body.get("cluster", "").strip()
