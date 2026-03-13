@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from typing import Any, Dict, List
 import yaml
 from pathlib import Path
 from config import ALARMFW_CONFIG, ALARMFW_SECRETS
+from auth import require_admin
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -165,7 +166,7 @@ def get_namespace(name: str) -> Dict[str, Any]:
     }
 
 
-@router.put("/namespaces/{name}")
+@router.put("/namespaces/{name}", dependencies=[Depends(require_admin)])
 def upsert_namespace(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
     f = CONF_D / f"{name}.conf"
     clusters = body.get("clusters", [])
@@ -193,7 +194,7 @@ def upsert_namespace(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "name": name, "generated_checks": count}
 
 
-@router.delete("/namespaces/{name}")
+@router.delete("/namespaces/{name}", dependencies=[Depends(require_admin)])
 def delete_namespace(name: str) -> Dict[str, Any]:
     f = CONF_D / f"{name}.conf"
     if not f.exists():
@@ -236,45 +237,7 @@ def get_cluster(name: str) -> Dict[str, Any]:
     raise HTTPException(404, f"Cluster '{name}' not found")
 
 
-@router.put("/clusters/{name}")
-def upsert_cluster(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    new_ocp_api  = str(body.get("ocp_api", ""))
-    new_insecure = bool(body.get("insecure", True))
-    data = _read_observe_yaml()
-    clusters = data.get("clusters", [])
-    found = False
-    for i, c in enumerate(clusters):
-        if isinstance(c, dict) and c.get("name") == name:
-            clusters[i] = {**c, "ocp_api": new_ocp_api, "insecure": new_insecure}
-            found = True
-            break
-    if not found:
-        clusters.append({
-            "name":                  name,
-            "ocp_api":               new_ocp_api,
-            "insecure":              new_insecure,
-            "prometheus_url":        "",
-            "prometheus_token_file": str(ALARMFW_SECRETS / f"{name}-prometheus.token"),
-        })
-    data["clusters"] = clusters
-    _write_observe_yaml(data)
-    return {"ok": True, "name": name}
-
-
-@router.delete("/clusters/{name}")
-def delete_cluster(name: str) -> Dict[str, Any]:
-    data = _read_observe_yaml()
-    before = data.get("clusters", [])
-    after = [c for c in before if not (isinstance(c, dict) and c.get("name") == name)]
-    if len(after) == len(before):
-        raise HTTPException(404, f"Cluster '{name}' not found")
-    data["clusters"] = after
-    _write_observe_yaml(data)
-    count = _generate_yaml()
-    return {"ok": True, "name": name, "generated_checks": count}
-
-
-@router.post("/generate")
+@router.post("/generate", dependencies=[Depends(require_admin)])
 def generate() -> Dict[str, Any]:
     count = _generate_yaml()
     return {"ok": True, "generated_checks": count}
@@ -309,7 +272,7 @@ def list_observe_clusters() -> List[Dict[str, Any]]:
     return data.get("clusters", [])
 
 
-@router.put("/observe-clusters/{name}")
+@router.put("/observe-clusters/{name}", dependencies=[Depends(require_admin)])
 def upsert_observe_cluster(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
     from config import ALARMFW_SECRETS
     entry: Dict[str, Any] = {
@@ -334,7 +297,7 @@ def upsert_observe_cluster(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "name": name}
 
 
-@router.delete("/observe-clusters/{name}")
+@router.delete("/observe-clusters/{name}", dependencies=[Depends(require_admin)])
 def delete_observe_cluster(name: str) -> Dict[str, Any]:
     data = _read_observe_yaml()
     clusters = [c for c in data.get("clusters", []) if isinstance(c, dict) and c.get("name") != name]
