@@ -1,30 +1,17 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from typing import Any, Dict, List
 from pathlib import Path
 from datetime import datetime
 import os
 import requests
 from config import ALARMFW_CONFIG
+from auth import require_operator
+from routers._conf import read_conf as _read_conf, is_true as _is_true
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 CONF_D = Path(ALARMFW_CONFIG).parent / "legacy/podhealthalarm/conf.d"
 DEFAULT_ZABBIX_URL = "http://10.86.36.216:9000/webhook"
-
-
-def _is_true(v: str | None) -> bool:
-    return (v or "").strip().lower() == "true"
-
-
-def _read_conf(path: Path) -> Dict[str, str]:
-    d: Dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        s = line.strip()
-        if not s or s.startswith("#") or "=" not in s:
-            continue
-        k, _, v = s.partition("=")
-        d[k.strip()] = v.strip().strip('"').strip("'")
-    return d
 
 
 def _get_zabbix_url() -> str:
@@ -52,7 +39,7 @@ def list_zabbix_namespaces() -> List[Dict[str, Any]]:
     return result
 
 
-@router.post("/zabbix-send")
+@router.post("/zabbix-send", dependencies=[Depends(require_operator)])
 def send_zabbix(body: Dict[str, Any]) -> Dict[str, Any]:
     """Zabbix webhook'una alarm (type=1) veya clear (type=2) eventi gönderir."""
     namespace  = str(body.get("namespace", "")).strip()

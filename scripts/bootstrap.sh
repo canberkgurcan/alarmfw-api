@@ -158,32 +158,35 @@ print("OK")
 PYEOF
 ok "observe.yaml güncellendi"
 
-# ── 5. Cluster config — API üzerinden ekle ────────────────────────────────────
-info "Cluster config API'ye yazılıyor (${CLUSTER})..."
+# ── 5. Cluster config — API üzerinden doğrula ────────────────────────────────
+# (observe.yaml step 4'te zaten yazıldı; bu adım API'yi tetikleyerek sync sağlar)
+info "Cluster config API'ye bildiriliyor (${CLUSTER})..."
 CLUSTER_PAYLOAD=$(cat << JSON
 {
   "name": "${CLUSTER}",
   "ocp_api": "${OCP_API}",
   "insecure": true,
-  "has_token_file": true
+  "prometheus_url": "${PROMETHEUS_URL}"
 }
 JSON
 )
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-    -X PUT "${API_BASE}/api/config/clusters/${CLUSTER}" \
+    -X PUT "${API_BASE}/api/config/observe-clusters/${CLUSTER}" \
     -H "Content-Type: application/json" \
+    -H "X-API-Key: ${ALARMFW_API_KEY:-}" \
     -d "${CLUSTER_PAYLOAD}" 2>/dev/null)
 if [[ "$HTTP_CODE" == "200" ]]; then
     ok "Cluster API kaydı tamam (HTTP 200)"
 else
-    warn "Cluster API yanıtı: HTTP ${HTTP_CODE} (sonraki adımlarda sorun çıkabilir)"
+    warn "Cluster API yanıtı: HTTP ${HTTP_CODE} (observe.yaml zaten güncel, devam ediliyor)"
 fi
 
 # ── 6. Config generate et ────────────────────────────────────────────────────
 info "Config oluşturuluyor (check YAML'ları)..."
 HTTP_CODE=$(curl -s -o /tmp/gen_out.json -w "%{http_code}" \
     -X POST "${API_BASE}/api/config/generate" \
-    -H "Content-Type: application/json" 2>/dev/null)
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: ${ALARMFW_API_KEY:-}" 2>/dev/null)
 if [[ "$HTTP_CODE" == "200" ]]; then
     CHECKS=$(python3 -c "import json; d=json.load(open('/tmp/gen_out.json')); print(d.get('generated_checks',0))" 2>/dev/null || echo "?")
     ok "Config üretildi — ${CHECKS} check"
