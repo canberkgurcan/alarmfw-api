@@ -1,15 +1,15 @@
 """
 alarmfw-api smoke tests
-Gerçek DB/dosya olmadan FastAPI TestClient üzerinden temel endpoint'leri kontrol eder.
+Gerçek DB/dosya olmadan ASGI transport üzerinden temel endpoint'leri kontrol eder.
 Çalıştır: cd alarmfw-api && .venv/bin/pytest tests/test_smoke.py -v
 """
 import os
 import sys
-import tempfile
+import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
-from fastapi.testclient import TestClient
 
 # alarmfw-api kök dizinini path'e ekle
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -38,39 +38,43 @@ def _tmp_dirs(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def client(_tmp_dirs):
+def app(_tmp_dirs):
     from main import app
-    return TestClient(app)
+    return app
 
 
-# ── 1. Health ──────────────────────────────────────────────────────────────────
+async def _request_async(app, method: str, path: str, **kwargs):
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        return await client.request(method, path, **kwargs)
 
-def test_health(client):
-    r = client.get("/api/health")
+
+def _request(app, method: str, path: str, **kwargs):
+    return asyncio.run(_request_async(app, method, path, **kwargs))
+
+
+def test_health(app):
+    r = _request(app, "GET", "/api/health")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
 
-
 # ── 2. Alarms — boş DB'de liste boş döner ─────────────────────────────────────
-
-def test_alarms_list_empty(client):
-    r = client.get("/api/alarms")
+def test_alarms_list_empty(app):
+    r = _request(app, "GET", "/api/alarms")
     assert r.status_code == 200
     assert r.json() == []
 
 
 # ── 3. Alarm history — boş DB'de boş döner ────────────────────────────────────
-
-def test_alarm_history_empty(client):
-    r = client.get("/api/alarms/history")
+def test_alarm_history_empty(app):
+    r = _request(app, "GET", "/api/alarms/history")
     assert r.status_code == 200
     assert r.json() == []
 
 
 # ── 4. Alarm metrics — DB yokken varsayılan sıfır değerler döner ──────────────
-
-def test_alarm_metrics_schema(client):
-    r = client.get("/api/alarms/metrics")
+def test_alarm_metrics_schema(app):
+    r = _request(app, "GET", "/api/alarms/metrics")
     assert r.status_code == 200
     data = r.json()
     assert "rules_evaluated_total" in data
@@ -79,44 +83,47 @@ def test_alarm_metrics_schema(client):
 
 
 # ── 5. Config clusters — observe.yaml boş olduğunda boş liste ─────────────────
-
-def test_config_clusters_empty(client):
-    r = client.get("/api/config/clusters")
+def test_config_clusters_empty(app):
+    r = _request(app, "GET", "/api/config/clusters")
     assert r.status_code == 200
     assert r.json() == []
 
 
 # ── 6. Maintenance policy — silences listesi döner ────────────────────────────
-
-def test_maintenance_policy_schema(client):
-    r = client.get("/api/policies/maintenance")
+def test_maintenance_policy_schema(app):
+    r = _request(app, "GET", "/api/policies/maintenance")
     assert r.status_code == 200
     data = r.json()
     assert "silences" in data
     assert isinstance(data["silences"], list)
 
 
-# ── 7. Cluster upsert + delete round-trip ─────────────────────────────────────
+# ── 7. Admin zabbix — olmayan namespace 404 vermeli ───────────────────────────
+def test_admin_zabbix_send_missing_namespace(app):
+    r = _request(app, "POST", "/api/admin/zabbix-send", json={"namespace": "missing", "type": "1"})
+    assert r.status_code == 404
 
-def test_cluster_upsert_and_delete(client):
+
+# ── 8. Cluster upsert + delete round-trip ─────────────────────────────────────
+def test_cluster_upsert_and_delete(app):
     payload = {"ocp_api": "https://api.test.example.com:6443", "insecure": True}
 
     # Ekle
-    r = client.put("/api/config/clusters/smoke-cluster", json=payload)
+    r = _request(app, "PUT", "/api/config/clusters/smoke-cluster", json=payload)
     assert r.status_code == 200
     assert r.json()["ok"] is True
 
     # Listede görünmeli
-    r = client.get("/api/config/clusters")
+    r = _request(app, "GET", "/api/config/clusters")
     names = [c["name"] for c in r.json()]
     assert "smoke-cluster" in names
 
     # Sil
-    r = client.delete("/api/config/clusters/smoke-cluster")
+    r = _request(app, "DELETE", "/api/config/clusters/smoke-cluster")
     assert r.status_code == 200
     assert r.json()["ok"] is True
 
     # Listeden çıkmış olmalı
-    r = client.get("/api/config/clusters")
+    r = _request(app, "GET", "/api/config/clusters")
     names = [c["name"] for c in r.json()]
     assert "smoke-cluster" not in names
