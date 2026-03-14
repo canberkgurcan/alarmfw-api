@@ -27,5 +27,5 @@ app.include_router(admin.router)
 
 
 @app.get("/api/health")
-def health():
+async def health():
     return {"status": "ok"}

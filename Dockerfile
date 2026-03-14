@@ -20,11 +20,11 @@ WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
     "fastapi>=0.111.0" \
+    "httpx>=0.27.0" \
     "uvicorn[standard]>=0.29.0" \
     "pyyaml>=6.0" \
     "python-dotenv>=1.0.0" \
-    "python-multipart>=0.0.9" \
-    "requests>=2.31.0"
+    "python-multipart>=0.0.9"
 
 COPY . .
 

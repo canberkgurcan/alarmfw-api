@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Query
-from typing import Any, Dict, List, Optional
 import json
 import sqlite3
 import time
+from fastapi import APIRouter, Query
+from typing import Any, Dict, List, Optional
 from config import ALARMFW_STATE
 
 router = APIRouter(prefix="/api/alarms", tags=["alarms"])
@@ -19,11 +19,7 @@ def _open_db():
     return conn
 
 
-@router.get("")
-def list_alarms(
-    limit: int = Query(50, ge=1, le=500),
-    status: Optional[str] = Query(None),
-) -> List[Dict[str, Any]]:
+def _list_alarms(limit: int, status: Optional[str]) -> List[Dict[str, Any]]:
     """SQLite alarm_state tablosundaki payload_json'ları döner (en yeniden eskiye)."""
     conn = _open_db()
     if conn is None:
@@ -50,8 +46,15 @@ def list_alarms(
     return result
 
 
-@router.get("/state")
-def get_alarm_state() -> List[Dict[str, Any]]:
+@router.get("")
+async def list_alarms(
+    limit: int = Query(50, ge=1, le=500),
+    status: Optional[str] = Query(None),
+) -> List[Dict[str, Any]]:
+    return _list_alarms(limit, status)
+
+
+def _get_alarm_state() -> List[Dict[str, Any]]:
     """SQLite state tablosunu döner."""
     conn = _open_db()
     if conn is None:
@@ -68,23 +71,26 @@ def get_alarm_state() -> List[Dict[str, Any]]:
         conn.close()
 
 
-@router.get("/history")
-def get_alarm_history(
-    limit: int = Query(100, ge=1, le=1000),
-    status: Optional[str] = Query(None),
-    cluster: Optional[str] = Query(None),
-    namespace: Optional[str] = Query(None),
-    alarm_name: Optional[str] = Query(None),
-    dedup_key: Optional[str] = Query(None),
-    since_ts: Optional[int] = Query(None),
-    hours: Optional[int] = Query(None),
+@router.get("/state")
+async def get_alarm_state() -> List[Dict[str, Any]]:
+    return _get_alarm_state()
+
+
+def _get_alarm_history(
+    limit: int,
+    status: Optional[str],
+    cluster: Optional[str],
+    namespace: Optional[str],
+    alarm_name: Optional[str],
+    dedup_key: Optional[str],
+    since_ts: Optional[int],
+    hours: Optional[int],
 ) -> List[Dict[str, Any]]:
     """alarm_history tablosundan event log döner. Tablo yoksa boş liste."""
     conn = _open_db()
     if conn is None:
         return []
     try:
-        # Tablo yoksa oluştur
         conn.execute("""
             CREATE TABLE IF NOT EXISTS alarm_history (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,8 +159,21 @@ def get_alarm_history(
     return result
 
 
-@router.get("/metrics")
-def get_alarm_metrics() -> Dict[str, Any]:
+@router.get("/history")
+async def get_alarm_history(
+    limit: int = Query(100, ge=1, le=1000),
+    status: Optional[str] = Query(None),
+    cluster: Optional[str] = Query(None),
+    namespace: Optional[str] = Query(None),
+    alarm_name: Optional[str] = Query(None),
+    dedup_key: Optional[str] = Query(None),
+    since_ts: Optional[int] = Query(None),
+    hours: Optional[int] = Query(None),
+) -> List[Dict[str, Any]]:
+    return _get_alarm_history(limit, status, cluster, namespace, alarm_name, dedup_key, since_ts, hours)
+
+
+def _get_alarm_metrics() -> Dict[str, Any]:
     """alarm_state tablosundan türetilmiş runtime metrikleri döner."""
     conn = _open_db()
     if conn is None:
@@ -201,8 +220,12 @@ def get_alarm_metrics() -> Dict[str, Any]:
     }
 
 
-@router.delete("/outbox")
-def clear_outbox() -> Dict[str, Any]:
+@router.get("/metrics")
+async def get_alarm_metrics() -> Dict[str, Any]:
+    return _get_alarm_metrics()
+
+
+def _clear_outbox() -> Dict[str, Any]:
     """Outbox klasörünü temizle (eski compat)."""
     outbox = ALARMFW_STATE / "outbox"
     if not outbox.exists():
@@ -211,3 +234,8 @@ def clear_outbox() -> Dict[str, Any]:
     for f in files:
         f.unlink()
     return {"deleted": len(files)}
+
+
+@router.delete("/outbox")
+async def clear_outbox() -> Dict[str, Any]:
+    return _clear_outbox()

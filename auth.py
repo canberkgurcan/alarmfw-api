@@ -14,9 +14,9 @@ def _check(key: str | None) -> str:
     return key or "anonymous"
 
 
-def require_operator(key: str | None = Security(_header)) -> str:
+async def require_operator(key: str | None = Security(_header)) -> str:
     return _check(key)
 
 
-def require_admin(key: str | None = Security(_header)) -> str:
+async def require_admin(key: str | None = Security(_header)) -> str:
     return _check(key)
