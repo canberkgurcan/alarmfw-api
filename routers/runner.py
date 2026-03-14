@@ -80,7 +80,7 @@ def _do_run(config: str) -> None:
 
 
 @router.post("")
-def trigger_run(body: Dict[str, Any] = {}) -> Dict[str, Any]:
+async def trigger_run(body: Dict[str, Any] = {}) -> Dict[str, Any]:
     global _last_run
     with _run_lock:
         if _last_run.get("status") == "running":
@@ -94,5 +94,5 @@ def trigger_run(body: Dict[str, Any] = {}) -> Dict[str, Any]:
 
 
 @router.get("/last")
-def get_last_run() -> Dict[str, Any]:
+async def get_last_run() -> Dict[str, Any]:
     return _last_run or {"status": "never_run"}

@@ -1,6 +1,6 @@
+import yaml
 from fastapi import APIRouter, HTTPException
 from typing import Any, Dict, List
-import yaml
 from config import ALARMFW_CONFIG
 
 router = APIRouter(prefix="/api/checks", tags=["checks"])
@@ -43,12 +43,12 @@ def _find_check(name: str):
 
 
 @router.get("")
-def list_checks() -> List[Dict[str, Any]]:
+async def list_checks() -> List[Dict[str, Any]]:
     return _check_files()
 
 
 @router.get("/{name}")
-def get_check(name: str) -> Dict[str, Any]:
+async def get_check(name: str) -> Dict[str, Any]:
     f, data, idx = _find_check(name)
     if f is None:
         raise HTTPException(404, f"Check '{name}' not found")
@@ -57,8 +57,7 @@ def get_check(name: str) -> Dict[str, Any]:
     return chk
 
 
-@router.put("/{name}")
-def update_check(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def _update_check(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
     f, data, idx = _find_check(name)
     if f is None:
         raise HTTPException(404, f"Check '{name}' not found")
@@ -68,12 +67,15 @@ def update_check(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "name": name}
 
 
-@router.post("")
-def create_check(body: Dict[str, Any]) -> Dict[str, Any]:
+@router.put("/{name}")
+async def update_check(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    return _update_check(name, body)
+
+
+def _create_check(body: Dict[str, Any]) -> Dict[str, Any]:
     name = body.get("name")
     if not name:
         raise HTTPException(400, "name is required")
-    # Eğer generated/ yoksa checks/ altına yaz
     target_dir = ALARMFW_CONFIG / "checks"
     target_dir.mkdir(exist_ok=True)
     fname = target_dir / f"{name}.yaml"
@@ -84,8 +86,12 @@ def create_check(body: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "name": name, "file": fname.name}
 
 
-@router.delete("/{name}")
-def delete_check(name: str) -> Dict[str, Any]:
+@router.post("")
+async def create_check(body: Dict[str, Any]) -> Dict[str, Any]:
+    return _create_check(body)
+
+
+def _delete_check(name: str) -> Dict[str, Any]:
     f, data, idx = _find_check(name)
     if f is None:
         raise HTTPException(404, f"Check '{name}' not found")
@@ -95,3 +101,8 @@ def delete_check(name: str) -> Dict[str, Any]:
     else:
         f.unlink()
     return {"ok": True, "name": name}
+
+
+@router.delete("/{name}")
+async def delete_check(name: str) -> Dict[str, Any]:
+    return _delete_check(name)

@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Query
-from typing import Any, Dict, List, Optional, Set, Tuple
 import json
 import sqlite3
 import yaml
+from fastapi import APIRouter, Query
+from typing import Any, Dict, List, Optional, Set, Tuple
 from pathlib import Path
 from config import ALARMFW_CONFIG, ALARMFW_STATE
 
@@ -80,7 +80,7 @@ def _read_sqlite_alarms() -> List[Dict[str, Any]]:
 # ── endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/pods")
-def get_pods(
+async def get_pods(
     cluster:   Optional[str] = Query(None),
     namespace: Optional[str] = Query(None),
 ) -> List[Dict[str, Any]]:
@@ -90,45 +90,50 @@ def get_pods(
     İkisi birden verilirse cluster + namespace filtresi uygulanır.
     Sadece PROBLEM veya ERROR statüsleri döner.
     """
-    alarms = _read_sqlite_alarms()
-    results = []
+    def _get_pods() -> List[Dict[str, Any]]:
+        alarms = _read_sqlite_alarms()
+        results = []
 
-    for item in alarms:
-        ns = item["namespace"]
-        cl = item["cluster"]
+        for item in alarms:
+            ns = item["namespace"]
+            cl = item["cluster"]
 
-        if cluster and namespace:
-            if cl != cluster or ns != namespace:
-                continue
-        elif cluster:
-            if cl != cluster:
-                continue
-        elif namespace:
-            if ns != namespace:
-                continue
+            if cluster and namespace:
+                if cl != cluster or ns != namespace:
+                    continue
+            elif cluster:
+                if cl != cluster:
+                    continue
+            elif namespace:
+                if ns != namespace:
+                    continue
 
-        results.append(item)
+            results.append(item)
 
-    # Sadece aktif problem/error
-    results = [r for r in results if r.get("status") in ("PROBLEM", "ERROR")]
+        results = [r for r in results if r.get("status") in ("PROBLEM", "ERROR")]
+        results.sort(key=lambda r: (r["namespace"], r["cluster"]))
+        return results
 
-    results.sort(key=lambda r: (r["namespace"], r["cluster"]))
-    return results
+    return _get_pods()
 
 
 @router.get("/namespaces")
-def list_monitor_namespaces() -> List[str]:
+async def list_monitor_namespaces() -> List[str]:
     """Config + SQLite'tan tüm namespace'leri döner."""
-    from_config: Set[str] = {ns for ns, _ in _config_ns_clusters()}
-    from_db: Set[str] = {r["namespace"] for r in _read_sqlite_alarms() if r["namespace"]}
-    return sorted(from_config | from_db)
+    def _list_monitor_namespaces() -> List[str]:
+        from_config: Set[str] = {ns for ns, _ in _config_ns_clusters()}
+        from_db: Set[str] = {r["namespace"] for r in _read_sqlite_alarms() if r["namespace"]}
+        return sorted(from_config | from_db)
+
+    return _list_monitor_namespaces()
 
 
 @router.get("/clusters")
-def list_monitor_clusters() -> List[str]:
+async def list_monitor_clusters() -> List[str]:
     """Config + SQLite'tan tüm cluster'ları döner."""
-    from_config: Set[str] = {cl for _, cl in _config_ns_clusters()}
-    from_db: Set[str] = {r["cluster"] for r in _read_sqlite_alarms() if r["cluster"]}
-    return sorted(from_config | from_db)
+    def _list_monitor_clusters() -> List[str]:
+        from_config: Set[str] = {cl for _, cl in _config_ns_clusters()}
+        from_db: Set[str] = {r["cluster"] for r in _read_sqlite_alarms() if r["cluster"]}
+        return sorted(from_config | from_db)
 
-
+    return _list_monitor_clusters()

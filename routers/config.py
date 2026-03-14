@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
-from typing import Any, Dict, List
-import yaml
 from pathlib import Path
+from typing import Any, Dict, List
+
+import yaml
+from fastapi import APIRouter, Depends, HTTPException
 from config import ALARMFW_CONFIG, ALARMFW_SECRETS
 from auth import require_admin
 from routers._conf import read_conf as _read_conf, write_conf as _write_conf, is_true as _is_true, bool_str as _bool_str
@@ -94,14 +95,41 @@ def _generate_yaml() -> int:
 # ── Namespaces ────────────────────────────────────────
 
 @router.get("/namespaces")
-def list_namespaces() -> List[Dict[str, Any]]:
-    if not CONF_D.exists():
-        return []
-    result = []
-    for f in sorted(CONF_D.glob("*.conf")):
+async def list_namespaces() -> List[Dict[str, Any]]:
+    def _list_namespaces() -> List[Dict[str, Any]]:
+        if not CONF_D.exists():
+            return []
+        result = []
+        for f in sorted(CONF_D.glob("*.conf")):
+            raw = _read_conf(f)
+            result.append({
+                "name":              f.stem,
+                "namespace_enabled": _is_true(raw.get("NAMESPACE_ENABLED")),
+                "clusters":          [c.strip() for c in raw.get("CLUSTERS", "").split(",") if c.strip()],
+                "zabbix_enabled":    _is_true(raw.get("ZABBIX_ENABLED")),
+                "mail_enabled":      _is_true(raw.get("MAIL_ENABLED")),
+                "severity":          raw.get("SEVERITY", "5"),
+                "node":              raw.get("NODE", ""),
+                "department":        raw.get("DEPARTMENT", ""),
+                "alertkey":          raw.get("POD_HEALTH_ALERTKEY", "OCP_POD_HEALTH"),
+                "alertgroup":        raw.get("ALERTGROUP", ""),
+                "mail_to":           raw.get("MAIL_TO", ""),
+                "mail_cc":           raw.get("MAIL_CC", ""),
+            })
+        return result
+
+    return _list_namespaces()
+
+
+@router.get("/namespaces/{name}")
+async def get_namespace(name: str) -> Dict[str, Any]:
+    def _get_namespace() -> Dict[str, Any]:
+        f = CONF_D / f"{name}.conf"
+        if not f.exists():
+            raise HTTPException(404, f"Namespace '{name}' not found")
         raw = _read_conf(f)
-        result.append({
-            "name":              f.stem,
+        return {
+            "name":              name,
             "namespace_enabled": _is_true(raw.get("NAMESPACE_ENABLED")),
             "clusters":          [c.strip() for c in raw.get("CLUSTERS", "").split(",") if c.strip()],
             "zabbix_enabled":    _is_true(raw.get("ZABBIX_ENABLED")),
@@ -113,141 +141,138 @@ def list_namespaces() -> List[Dict[str, Any]]:
             "alertgroup":        raw.get("ALERTGROUP", ""),
             "mail_to":           raw.get("MAIL_TO", ""),
             "mail_cc":           raw.get("MAIL_CC", ""),
-        })
-    return result
+        }
 
-
-@router.get("/namespaces/{name}")
-def get_namespace(name: str) -> Dict[str, Any]:
-    f = CONF_D / f"{name}.conf"
-    if not f.exists():
-        raise HTTPException(404, f"Namespace '{name}' not found")
-    raw = _read_conf(f)
-    return {
-        "name":              name,
-        "namespace_enabled": _is_true(raw.get("NAMESPACE_ENABLED")),
-        "clusters":          [c.strip() for c in raw.get("CLUSTERS", "").split(",") if c.strip()],
-        "zabbix_enabled":    _is_true(raw.get("ZABBIX_ENABLED")),
-        "mail_enabled":      _is_true(raw.get("MAIL_ENABLED")),
-        "severity":          raw.get("SEVERITY", "5"),
-        "node":              raw.get("NODE", ""),
-        "department":        raw.get("DEPARTMENT", ""),
-        "alertkey":          raw.get("POD_HEALTH_ALERTKEY", "OCP_POD_HEALTH"),
-        "alertgroup":        raw.get("ALERTGROUP", ""),
-        "mail_to":           raw.get("MAIL_TO", ""),
-        "mail_cc":           raw.get("MAIL_CC", ""),
-    }
+    return _get_namespace()
 
 
 @router.put("/namespaces/{name}", dependencies=[Depends(require_admin)])
-def upsert_namespace(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    f = CONF_D / f"{name}.conf"
-    clusters = body.get("clusters", [])
-    if isinstance(clusters, list):
-        clusters_str = ",".join(clusters)
-    else:
-        clusters_str = str(clusters)
+async def upsert_namespace(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def _upsert_namespace() -> Dict[str, Any]:
+        f = CONF_D / f"{name}.conf"
+        clusters = body.get("clusters", [])
+        if isinstance(clusters, list):
+            clusters_str = ",".join(clusters)
+        else:
+            clusters_str = str(clusters)
 
-    data = {
-        "CLUSTERS":            clusters_str,
-        "NAMESPACE_ENABLED":   _bool_str(body.get("namespace_enabled", True)),
-        "POD_HEALTH_ENABLED":  "true",
-        "ZABBIX_ENABLED":      _bool_str(body.get("zabbix_enabled", False)),
-        "MAIL_ENABLED":        _bool_str(body.get("mail_enabled", False)),
-        "SEVERITY":            str(body.get("severity", "5")),
-        "NODE":                str(body.get("node", "OCP")),
-        "DEPARTMENT":          str(body.get("department", "")),
-        "POD_HEALTH_ALERTKEY": str(body.get("alertkey", "OCP_POD_HEALTH")),
-        "ALERTGROUP":          str(body.get("alertgroup", f"{name}AlertGroup")),
-        "MAIL_TO":             str(body.get("mail_to", "")),
-        "MAIL_CC":             str(body.get("mail_cc", "")),
-    }
-    _write_conf(f, data)
-    count = _generate_yaml()
-    return {"ok": True, "name": name, "generated_checks": count}
+        data = {
+            "CLUSTERS":            clusters_str,
+            "NAMESPACE_ENABLED":   _bool_str(body.get("namespace_enabled", True)),
+            "POD_HEALTH_ENABLED":  "true",
+            "ZABBIX_ENABLED":      _bool_str(body.get("zabbix_enabled", False)),
+            "MAIL_ENABLED":        _bool_str(body.get("mail_enabled", False)),
+            "SEVERITY":            str(body.get("severity", "5")),
+            "NODE":                str(body.get("node", "OCP")),
+            "DEPARTMENT":          str(body.get("department", "")),
+            "POD_HEALTH_ALERTKEY": str(body.get("alertkey", "OCP_POD_HEALTH")),
+            "ALERTGROUP":          str(body.get("alertgroup", f"{name}AlertGroup")),
+            "MAIL_TO":             str(body.get("mail_to", "")),
+            "MAIL_CC":             str(body.get("mail_cc", "")),
+        }
+        _write_conf(f, data)
+        count = _generate_yaml()
+        return {"ok": True, "name": name, "generated_checks": count}
+
+    return _upsert_namespace()
 
 
 @router.delete("/namespaces/{name}", dependencies=[Depends(require_admin)])
-def delete_namespace(name: str) -> Dict[str, Any]:
-    f = CONF_D / f"{name}.conf"
-    if not f.exists():
-        raise HTTPException(404, f"Namespace '{name}' not found")
-    f.unlink()
-    count = _generate_yaml()
-    return {"ok": True, "name": name, "generated_checks": count}
+async def delete_namespace(name: str) -> Dict[str, Any]:
+    def _delete_namespace() -> Dict[str, Any]:
+        f = CONF_D / f"{name}.conf"
+        if not f.exists():
+            raise HTTPException(404, f"Namespace '{name}' not found")
+        f.unlink()
+        count = _generate_yaml()
+        return {"ok": True, "name": name, "generated_checks": count}
+
+    return _delete_namespace()
 
 
 # ── Clusters ──────────────────────────────────────────
 # Tek kaynak: observe.yaml (Secrets sayfasında eklenen cluster'lar burada görünür)
 
 @router.get("/clusters")
-def list_clusters() -> List[Dict[str, Any]]:
-    data = _read_observe_yaml()
-    result = []
-    for c in data.get("clusters", []):
-        if not isinstance(c, dict) or not c.get("name"):
-            continue
-        name = c["name"]
-        result.append({
-            "name":           name,
-            "ocp_api":        c.get("ocp_api", ""),
-            "insecure":       bool(c.get("insecure", True)),
-            "has_token_file": (ALARMFW_SECRETS / f"{name}.token").exists(),
-        })
-    return result
+async def list_clusters() -> List[Dict[str, Any]]:
+    def _list_clusters() -> List[Dict[str, Any]]:
+        data = _read_observe_yaml()
+        result = []
+        for c in data.get("clusters", []):
+            if not isinstance(c, dict) or not c.get("name"):
+                continue
+            name = c["name"]
+            result.append({
+                "name":           name,
+                "ocp_api":        c.get("ocp_api", ""),
+                "insecure":       bool(c.get("insecure", True)),
+                "has_token_file": (ALARMFW_SECRETS / f"{name}.token").exists(),
+            })
+        return result
+
+    return _list_clusters()
 
 
 @router.get("/clusters/{name}")
-def get_cluster(name: str) -> Dict[str, Any]:
-    data = _read_observe_yaml()
-    for c in data.get("clusters", []):
-        if isinstance(c, dict) and c.get("name") == name:
-            return {
-                "name":     name,
-                "ocp_api":  c.get("ocp_api", ""),
-                "insecure": bool(c.get("insecure", True)),
-            }
-    raise HTTPException(404, f"Cluster '{name}' not found")
+async def get_cluster(name: str) -> Dict[str, Any]:
+    def _get_cluster() -> Dict[str, Any]:
+        data = _read_observe_yaml()
+        for c in data.get("clusters", []):
+            if isinstance(c, dict) and c.get("name") == name:
+                return {
+                    "name":     name,
+                    "ocp_api":  c.get("ocp_api", ""),
+                    "insecure": bool(c.get("insecure", True)),
+                }
+        raise HTTPException(404, f"Cluster '{name}' not found")
+
+    return _get_cluster()
 
 
 @router.put("/clusters/{name}", dependencies=[Depends(require_admin)])
-def upsert_cluster(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+async def upsert_cluster(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """ocp_api ve insecure alanlarını günceller; prometheus ve diğer alanları korur."""
-    data     = _read_observe_yaml()
-    clusters = data.get("clusters", [])
-    found    = False
-    for i, c in enumerate(clusters):
-        if isinstance(c, dict) and c.get("name") == name:
-            clusters[i] = {
-                **c,
+    def _upsert_cluster() -> Dict[str, Any]:
+        data     = _read_observe_yaml()
+        clusters = data.get("clusters", [])
+        found    = False
+        for i, c in enumerate(clusters):
+            if isinstance(c, dict) and c.get("name") == name:
+                clusters[i] = {
+                    **c,
+                    "name":     name,
+                    "ocp_api":  str(body.get("ocp_api", c.get("ocp_api", ""))),
+                    "insecure": bool(body.get("insecure", c.get("insecure", True))),
+                }
+                found = True
+                break
+        if not found:
+            clusters.append({
                 "name":     name,
-                "ocp_api":  str(body.get("ocp_api", c.get("ocp_api", ""))),
-                "insecure": bool(body.get("insecure", c.get("insecure", True))),
-            }
-            found = True
-            break
-    if not found:
-        clusters.append({
-            "name":     name,
-            "ocp_api":  str(body.get("ocp_api", "")),
-            "insecure": bool(body.get("insecure", True)),
-        })
-    data["clusters"] = clusters
-    _write_observe_yaml(data)
-    return {"ok": True, "name": name}
+                "ocp_api":  str(body.get("ocp_api", "")),
+                "insecure": bool(body.get("insecure", True)),
+            })
+        data["clusters"] = clusters
+        _write_observe_yaml(data)
+        return {"ok": True, "name": name}
+
+    return _upsert_cluster()
 
 
 @router.delete("/clusters/{name}", dependencies=[Depends(require_admin)])
-def delete_cluster(name: str) -> Dict[str, Any]:
-    data     = _read_observe_yaml()
-    clusters = [c for c in data.get("clusters", []) if isinstance(c, dict) and c.get("name") != name]
-    data["clusters"] = clusters
-    _write_observe_yaml(data)
-    return {"ok": True, "name": name}
+async def delete_cluster(name: str) -> Dict[str, Any]:
+    def _delete_cluster() -> Dict[str, Any]:
+        data     = _read_observe_yaml()
+        clusters = [c for c in data.get("clusters", []) if isinstance(c, dict) and c.get("name") != name]
+        data["clusters"] = clusters
+        _write_observe_yaml(data)
+        return {"ok": True, "name": name}
+
+    return _delete_cluster()
 
 
 @router.post("/generate", dependencies=[Depends(require_admin)])
-def generate() -> Dict[str, Any]:
+async def generate() -> Dict[str, Any]:
     count = _generate_yaml()
     return {"ok": True, "generated_checks": count}
 
@@ -276,40 +301,46 @@ def _write_observe_yaml(data: Dict[str, Any]) -> None:
 
 
 @router.get("/observe-clusters")
-def list_observe_clusters() -> List[Dict[str, Any]]:
+async def list_observe_clusters() -> List[Dict[str, Any]]:
     data = _read_observe_yaml()
     return data.get("clusters", [])
 
 
 @router.put("/observe-clusters/{name}", dependencies=[Depends(require_admin)])
-def upsert_observe_cluster(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    from config import ALARMFW_SECRETS
-    entry: Dict[str, Any] = {
-        "name":    name,
-        "ocp_api": str(body.get("ocp_api", "")),
-        "insecure": bool(body.get("insecure", True)),
-        "prometheus_url":        str(body.get("prometheus_url", "")),
-        "prometheus_token_file": str(ALARMFW_SECRETS / f"{name}-prometheus.token"),
-    }
-    data = _read_observe_yaml()
-    clusters = data.get("clusters", [])
-    found = False
-    for i, c in enumerate(clusters):
-        if isinstance(c, dict) and c.get("name") == name:
-            clusters[i] = entry
-            found = True
-            break
-    if not found:
-        clusters.append(entry)
-    data["clusters"] = clusters
-    _write_observe_yaml(data)
-    return {"ok": True, "name": name}
+async def upsert_observe_cluster(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def _upsert_observe_cluster() -> Dict[str, Any]:
+        from config import ALARMFW_SECRETS
+        entry: Dict[str, Any] = {
+            "name":    name,
+            "ocp_api": str(body.get("ocp_api", "")),
+            "insecure": bool(body.get("insecure", True)),
+            "prometheus_url":        str(body.get("prometheus_url", "")),
+            "prometheus_token_file": str(ALARMFW_SECRETS / f"{name}-prometheus.token"),
+        }
+        data = _read_observe_yaml()
+        clusters = data.get("clusters", [])
+        found = False
+        for i, c in enumerate(clusters):
+            if isinstance(c, dict) and c.get("name") == name:
+                clusters[i] = entry
+                found = True
+                break
+        if not found:
+            clusters.append(entry)
+        data["clusters"] = clusters
+        _write_observe_yaml(data)
+        return {"ok": True, "name": name}
+
+    return _upsert_observe_cluster()
 
 
 @router.delete("/observe-clusters/{name}", dependencies=[Depends(require_admin)])
-def delete_observe_cluster(name: str) -> Dict[str, Any]:
-    data = _read_observe_yaml()
-    clusters = [c for c in data.get("clusters", []) if isinstance(c, dict) and c.get("name") != name]
-    data["clusters"] = clusters
-    _write_observe_yaml(data)
-    return {"ok": True, "name": name}
+async def delete_observe_cluster(name: str) -> Dict[str, Any]:
+    def _delete_observe_cluster() -> Dict[str, Any]:
+        data = _read_observe_yaml()
+        clusters = [c for c in data.get("clusters", []) if isinstance(c, dict) and c.get("name") != name]
+        data["clusters"] = clusters
+        _write_observe_yaml(data)
+        return {"ok": True, "name": name}
+
+    return _delete_observe_cluster()

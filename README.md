@@ -27,7 +27,7 @@ Swagger UI: `http://localhost:8000/docs`
 ## Geliştirme
 
 ```bash
-pip install fastapi uvicorn pyyaml python-dotenv
+pip install fastapi httpx uvicorn pyyaml python-dotenv
 uvicorn main:app --reload --port 8000
 ```
 

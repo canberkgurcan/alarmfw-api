@@ -62,24 +62,30 @@ def _actor_from_request(request: Request) -> str:
 # ── Dedup (legacy, kept for compat) ───────────────────
 
 @router.get("/dedup")
-def get_dedup() -> Dict[str, Any]:
-    if not _DEDUP_FILE.exists():
-        raise HTTPException(404, "dedup.yaml not found")
-    data = yaml.safe_load(_DEDUP_FILE.read_text()) or {}
-    return data.get("dedup_policy") or data
+async def get_dedup() -> Dict[str, Any]:
+    def _get_dedup() -> Dict[str, Any]:
+        if not _DEDUP_FILE.exists():
+            raise HTTPException(404, "dedup.yaml not found")
+        data = yaml.safe_load(_DEDUP_FILE.read_text()) or {}
+        return data.get("dedup_policy") or data
+
+    return _get_dedup()
 
 
 @router.put("/dedup")
-def update_dedup(body: Dict[str, Any]) -> Dict[str, Any]:
-    if not _DEDUP_FILE.exists():
-        raise HTTPException(404, "dedup.yaml not found")
-    data = yaml.safe_load(_DEDUP_FILE.read_text()) or {}
-    if "dedup_policy" in data:
-        data["dedup_policy"].update(body)
-    else:
-        data.update(body)
-    _DEDUP_FILE.write_text(yaml.dump(data, allow_unicode=True, default_flow_style=False))
-    return {"ok": True}
+async def update_dedup(body: Dict[str, Any]) -> Dict[str, Any]:
+    def _update_dedup() -> Dict[str, Any]:
+        if not _DEDUP_FILE.exists():
+            raise HTTPException(404, "dedup.yaml not found")
+        data = yaml.safe_load(_DEDUP_FILE.read_text()) or {}
+        if "dedup_policy" in data:
+            data["dedup_policy"].update(body)
+        else:
+            data.update(body)
+        _DEDUP_FILE.write_text(yaml.dump(data, allow_unicode=True, default_flow_style=False))
+        return {"ok": True}
+
+    return _update_dedup()
 
 
 # ── Maintenance YAML helpers ───────────────────────────
@@ -152,85 +158,94 @@ def _save_version(
 # ── Maintenance Policy CRUD ────────────────────────────
 
 @router.get("/maintenance")
-def get_maintenance() -> Dict[str, Any]:
+async def get_maintenance() -> Dict[str, Any]:
     return _read_maintenance()
 
 
 @router.put("/maintenance", dependencies=[Depends(require_admin)])
-def update_maintenance(body: Dict[str, Any], request: Request) -> Dict[str, Any]:
+async def update_maintenance(body: Dict[str, Any], request: Request) -> Dict[str, Any]:
     actor     = _actor_from_request(request)
     client_ip = request.client.host if request.client else None
 
-    old = _read_maintenance()
-    new_policy: Dict[str, Any] = {"silences": body.get("silences", [])}
-    _write_maintenance(new_policy)
+    def _update_maintenance() -> Dict[str, Any]:
+        old = _read_maintenance()
+        new_policy: Dict[str, Any] = {"silences": body.get("silences", [])}
+        _write_maintenance(new_policy)
 
-    conn = _open_policies_db()
-    try:
-        ver_id = _save_version(conn, policy="maintenance", source_action="put", actor=actor, content=new_policy)
-        _save_audit(
-            conn, actor=actor, client_ip=client_ip,
-            policy="maintenance", action="update", resource="silences",
-            summary=f"Updated maintenance policy ({len(new_policy['silences'])} silences)",
-            changes={"old": old, "new": new_policy},
-        )
-    finally:
-        conn.close()
+        conn = _open_policies_db()
+        try:
+            ver_id = _save_version(conn, policy="maintenance", source_action="put", actor=actor, content=new_policy)
+            _save_audit(
+                conn, actor=actor, client_ip=client_ip,
+                policy="maintenance", action="update", resource="silences",
+                summary=f"Updated maintenance policy ({len(new_policy['silences'])} silences)",
+                changes={"old": old, "new": new_policy},
+            )
+        finally:
+            conn.close()
 
-    return {"ok": True, "silences": len(new_policy["silences"]), "version_id": ver_id}
+        return {"ok": True, "silences": len(new_policy["silences"]), "version_id": ver_id}
+
+    return _update_maintenance()
 
 
 @router.post("/maintenance/silences", dependencies=[Depends(require_admin)])
-def create_silence(body: Dict[str, Any], request: Request) -> Dict[str, Any]:
+async def create_silence(body: Dict[str, Any], request: Request) -> Dict[str, Any]:
     actor     = _actor_from_request(request)
     client_ip = request.client.host if request.client else None
 
-    silence_id = body.get("id") or str(uuid.uuid4())
-    silence = {**body, "id": silence_id}
+    def _create_silence() -> Dict[str, Any]:
+        silence_id = body.get("id") or str(uuid.uuid4())
+        silence = {**body, "id": silence_id}
 
-    policy = _read_maintenance()
-    policy["silences"].append(silence)
-    _write_maintenance(policy)
+        policy = _read_maintenance()
+        policy["silences"].append(silence)
+        _write_maintenance(policy)
 
-    conn = _open_policies_db()
-    try:
-        ver_id = _save_version(conn, policy="maintenance", source_action="create_silence", actor=actor, content=policy)
-        _save_audit(
-            conn, actor=actor, client_ip=client_ip,
-            policy="maintenance", action="create", resource=f"silence:{silence_id}",
-            summary=f"Created silence {silence_id}",
-            changes={"silence": silence},
-        )
-    finally:
-        conn.close()
+        conn = _open_policies_db()
+        try:
+            ver_id = _save_version(conn, policy="maintenance", source_action="create_silence", actor=actor, content=policy)
+            _save_audit(
+                conn, actor=actor, client_ip=client_ip,
+                policy="maintenance", action="create", resource=f"silence:{silence_id}",
+                summary=f"Created silence {silence_id}",
+                changes={"silence": silence},
+            )
+        finally:
+            conn.close()
 
-    return {"ok": True, "id": silence_id, "version_id": ver_id}
+        return {"ok": True, "id": silence_id, "version_id": ver_id}
+
+    return _create_silence()
 
 
 @router.delete("/maintenance/silences/{silence_id}", dependencies=[Depends(require_admin)])
-def delete_silence(silence_id: str, request: Request) -> Dict[str, Any]:
+async def delete_silence(silence_id: str, request: Request) -> Dict[str, Any]:
     actor     = _actor_from_request(request)
     client_ip = request.client.host if request.client else None
 
-    policy = _read_maintenance()
-    before = len(policy["silences"])
-    policy["silences"] = [s for s in policy["silences"] if s.get("id") != silence_id]
-    if len(policy["silences"]) == before:
-        raise HTTPException(404, f"Silence '{silence_id}' not found")
-    _write_maintenance(policy)
+    def _delete_silence() -> Dict[str, Any]:
+        policy = _read_maintenance()
+        before = len(policy["silences"])
+        policy["silences"] = [s for s in policy["silences"] if s.get("id") != silence_id]
+        if len(policy["silences"]) == before:
+            raise HTTPException(404, f"Silence '{silence_id}' not found")
+        _write_maintenance(policy)
 
-    conn = _open_policies_db()
-    try:
-        ver_id = _save_version(conn, policy="maintenance", source_action="delete_silence", actor=actor, content=policy)
-        _save_audit(
-            conn, actor=actor, client_ip=client_ip,
-            policy="maintenance", action="delete", resource=f"silence:{silence_id}",
-            summary=f"Deleted silence {silence_id}",
-        )
-    finally:
-        conn.close()
+        conn = _open_policies_db()
+        try:
+            ver_id = _save_version(conn, policy="maintenance", source_action="delete_silence", actor=actor, content=policy)
+            _save_audit(
+                conn, actor=actor, client_ip=client_ip,
+                policy="maintenance", action="delete", resource=f"silence:{silence_id}",
+                summary=f"Deleted silence {silence_id}",
+            )
+        finally:
+            conn.close()
 
-    return {"ok": True, "id": silence_id, "version_id": ver_id}
+        return {"ok": True, "id": silence_id, "version_id": ver_id}
+
+    return _delete_silence()
 
 
 # ── Dry-run ────────────────────────────────────────────
@@ -257,132 +272,141 @@ def _parse_utc(value: Any):
 
 
 @router.post("/maintenance/silences/dry-run")
-def dry_run_silence(body: Dict[str, Any]) -> Dict[str, Any]:
-    silence  = body.get("silence") or {}
-    at_utc   = body.get("at_utc")
-    now      = _parse_utc(at_utc) if at_utc else datetime.now(timezone.utc)
-    evaluated_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+async def dry_run_silence(body: Dict[str, Any]) -> Dict[str, Any]:
+    def _dry_run_silence() -> Dict[str, Any]:
+        silence  = body.get("silence") or {}
+        at_utc   = body.get("at_utc")
+        now      = _parse_utc(at_utc) if at_utc else datetime.now(timezone.utc)
+        evaluated_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    start = _parse_utc(silence.get("starts_at_utc"))
-    end   = _parse_utc(silence.get("ends_at_utc"))
-    active = bool(start and end and start <= now < end)
+        start = _parse_utc(silence.get("starts_at_utc"))
+        end   = _parse_utc(silence.get("ends_at_utc"))
+        active = bool(start and end and start <= now < end)
 
-    matches: List[Dict[str, Any]] = []
-    total_candidates = 0
+        matches: List[Dict[str, Any]] = []
+        total_candidates = 0
 
-    if _ALARM_DB.exists():
-        conn = sqlite3.connect(str(_ALARM_DB), timeout=5)
-        conn.row_factory = sqlite3.Row
-        try:
-            rows = conn.execute(
-                "SELECT alarm_name, payload_json FROM alarm_state WHERE payload_json IS NOT NULL"
-            ).fetchall()
-        finally:
-            conn.close()
-
-        total_candidates = len(rows)
-        for row in rows:
+        if _ALARM_DB.exists():
+            conn = sqlite3.connect(str(_ALARM_DB), timeout=5)
+            conn.row_factory = sqlite3.Row
             try:
-                payload = json.loads(row["payload_json"])
-            except Exception:
-                continue
+                rows = conn.execute(
+                    "SELECT alarm_name, payload_json FROM alarm_state WHERE payload_json IS NOT NULL"
+                ).fetchall()
+            finally:
+                conn.close()
 
-            alarm_name = payload.get("alarm_name", row["alarm_name"] or "")
-            cluster    = payload.get("cluster", "")
-            namespace  = payload.get("namespace", "")
+            total_candidates = len(rows)
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload_json"])
+                except Exception:
+                    continue
 
-            if not (
-                _match(silence.get("alarm_name"), alarm_name)
-                and _match(silence.get("cluster"),    cluster)
-                and _match(silence.get("namespace"),  namespace)
-            ):
-                continue
+                alarm_name = payload.get("alarm_name", row["alarm_name"] or "")
+                cluster    = payload.get("cluster", "")
+                namespace  = payload.get("namespace", "")
 
-            matches.append({
-                "alarm_name":  alarm_name or "",
-                "cluster":     cluster or "",
-                "namespace":   namespace or "",
-                "check_name":  alarm_name or "",
-                "check_type":  payload.get("tags", {}).get("type", ""),
-                "source_file": "",
-            })
+                if not (
+                    _match(silence.get("alarm_name"), alarm_name)
+                    and _match(silence.get("cluster"),    cluster)
+                    and _match(silence.get("namespace"),  namespace)
+                ):
+                    continue
 
-    return {
-        "ok": True,
-        "active": active,
-        "evaluated_at_utc": evaluated_at,
-        "total_candidates": total_candidates,
-        "matched": len(matches),
-        "matches": matches,
-    }
+                matches.append({
+                    "alarm_name":  alarm_name or "",
+                    "cluster":     cluster or "",
+                    "namespace":   namespace or "",
+                    "check_name":  alarm_name or "",
+                    "check_type":  payload.get("tags", {}).get("type", ""),
+                    "source_file": "",
+                })
+
+        return {
+            "ok": True,
+            "active": active,
+            "evaluated_at_utc": evaluated_at,
+            "total_candidates": total_candidates,
+            "matched": len(matches),
+            "matches": matches,
+        }
+
+    return _dry_run_silence()
 
 
 # ── Audit ──────────────────────────────────────────────
 
 @router.get("/audit")
-def get_audit(
+async def get_audit(
     policy: str = "maintenance",
     limit: int = 50,
 ) -> Dict[str, Any]:
-    conn = _open_policies_db()
-    try:
-        rows = conn.execute(
-            "SELECT id,ts_utc,actor,client_ip,policy,action,resource,summary,changes_json "
-            "FROM policy_audit WHERE policy=? ORDER BY ts_utc DESC LIMIT ?",
-            (policy, limit),
-        ).fetchall()
-    finally:
-        conn.close()
+    def _get_audit() -> Dict[str, Any]:
+        conn = _open_policies_db()
+        try:
+            rows = conn.execute(
+                "SELECT id,ts_utc,actor,client_ip,policy,action,resource,summary,changes_json "
+                "FROM policy_audit WHERE policy=? ORDER BY ts_utc DESC LIMIT ?",
+                (policy, limit),
+            ).fetchall()
+        finally:
+            conn.close()
 
-    entries = []
-    for r in rows:
-        entry = dict(r)
-        raw_changes = entry.pop("changes_json", None)
-        if raw_changes:
-            try:
-                entry["changes"] = json.loads(raw_changes)
-            except Exception:
-                pass
-        entries.append(entry)
+        entries = []
+        for r in rows:
+            entry = dict(r)
+            raw_changes = entry.pop("changes_json", None)
+            if raw_changes:
+                try:
+                    entry["changes"] = json.loads(raw_changes)
+                except Exception:
+                    pass
+            entries.append(entry)
 
-    return {"entries": entries, "count": len(entries)}
+        return {"entries": entries, "count": len(entries)}
+
+    return _get_audit()
 
 
 # ── Versions ───────────────────────────────────────────
 
 @router.get("/versions")
-def get_versions(
+async def get_versions(
     policy: str = "maintenance",
     limit: int = 25,
 ) -> Dict[str, Any]:
-    conn = _open_policies_db()
-    try:
-        rows = conn.execute(
-            "SELECT id,policy,created_at_utc,source_action,actor,meta_json "
-            "FROM policy_versions WHERE policy=? ORDER BY created_at_utc DESC LIMIT ?",
-            (policy, limit),
-        ).fetchall()
-    finally:
-        conn.close()
+    def _get_versions() -> Dict[str, Any]:
+        conn = _open_policies_db()
+        try:
+            rows = conn.execute(
+                "SELECT id,policy,created_at_utc,source_action,actor,meta_json "
+                "FROM policy_versions WHERE policy=? ORDER BY created_at_utc DESC LIMIT ?",
+                (policy, limit),
+            ).fetchall()
+        finally:
+            conn.close()
 
-    entries = []
-    for r in rows:
-        entry = dict(r)
-        raw_meta = entry.pop("meta_json", None)
-        if raw_meta:
-            try:
-                entry["meta"] = json.loads(raw_meta)
-            except Exception:
-                pass
-        entries.append(entry)
+        entries = []
+        for r in rows:
+            entry = dict(r)
+            raw_meta = entry.pop("meta_json", None)
+            if raw_meta:
+                try:
+                    entry["meta"] = json.loads(raw_meta)
+                except Exception:
+                    pass
+            entries.append(entry)
 
-    return {"policy": policy, "entries": entries, "count": len(entries)}
+        return {"policy": policy, "entries": entries, "count": len(entries)}
+
+    return _get_versions()
 
 
 # ── Rollback ───────────────────────────────────────────
 
 @router.post("/rollback", dependencies=[Depends(require_admin)])
-def rollback_version(body: Dict[str, Any], request: Request) -> Dict[str, Any]:
+async def rollback_version(body: Dict[str, Any], request: Request) -> Dict[str, Any]:
     policy     = body.get("policy", "maintenance")
     version_id = body.get("version_id", "")
     actor      = _actor_from_request(request)
@@ -391,36 +415,39 @@ def rollback_version(body: Dict[str, Any], request: Request) -> Dict[str, Any]:
     if not version_id:
         raise HTTPException(400, "version_id required")
 
-    conn = _open_policies_db()
-    try:
-        row = conn.execute(
-            "SELECT content_json, created_at_utc FROM policy_versions WHERE id=? AND policy=?",
-            (version_id, policy),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404, f"Version '{version_id}' not found for policy '{policy}'")
+    def _rollback_version() -> Dict[str, Any]:
+        conn = _open_policies_db()
+        try:
+            row = conn.execute(
+                "SELECT content_json, created_at_utc FROM policy_versions WHERE id=? AND policy=?",
+                (version_id, policy),
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, f"Version '{version_id}' not found for policy '{policy}'")
 
-        content          = json.loads(row["content_json"])
-        rolled_back_from = row["created_at_utc"]
+            content          = json.loads(row["content_json"])
+            rolled_back_from = row["created_at_utc"]
 
-        if policy == "maintenance":
-            _write_maintenance(content)
+            if policy == "maintenance":
+                _write_maintenance(content)
 
-        new_ver_id = _save_version(
-            conn, policy=policy, source_action="rollback", actor=actor,
-            content=content, meta={"rolled_back_to_version": version_id},
-        )
-        _save_audit(
-            conn, actor=actor, client_ip=client_ip,
-            policy=policy, action="rollback", resource=f"version:{version_id}",
-            summary=f"Rolled back to version {version_id} (originally from {rolled_back_from})",
-        )
-    finally:
-        conn.close()
+            new_ver_id = _save_version(
+                conn, policy=policy, source_action="rollback", actor=actor,
+                content=content, meta={"rolled_back_to_version": version_id},
+            )
+            _save_audit(
+                conn, actor=actor, client_ip=client_ip,
+                policy=policy, action="rollback", resource=f"version:{version_id}",
+                summary=f"Rolled back to version {version_id} (originally from {rolled_back_from})",
+            )
+        finally:
+            conn.close()
 
-    return {
-        "ok": True,
-        "policy": policy,
-        "rolled_back_from": rolled_back_from,
-        "version_id": new_ver_id,
-    }
+        return {
+            "ok": True,
+            "policy": policy,
+            "rolled_back_from": rolled_back_from,
+            "version_id": new_ver_id,
+        }
+
+    return _rollback_version()
