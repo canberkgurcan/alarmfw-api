@@ -13,11 +13,13 @@ from routers._conf import read_conf as _read_conf, is_true as _is_true
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 CONF_D = Path(ALARMFW_CONFIG).parent / "legacy/podhealthalarm/conf.d"
-DEFAULT_ZABBIX_URL = "http://zabbix.example.com:9000/webhook"
 
 
 def _get_zabbix_url() -> str:
-    return os.getenv("ZABBIX_URL", DEFAULT_ZABBIX_URL).strip()
+    url = os.getenv("ZABBIX_URL", "").strip()
+    if not url:
+        raise HTTPException(500, "ZABBIX_URL is not configured")
+    return url
 
 
 @router.get("/zabbix-namespaces")
